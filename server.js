@@ -12,8 +12,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ✅ HOME ROUTE (NOT FOUND FIX)
+app.get("/", (req, res) => {
+  res.send("🚀 AI YouTube Auto-Post Server is running!");
+});
+
+// ===============================
+// MULTER (VIDEO UPLOAD)
+// ===============================
 const upload = multer({ dest: "uploads/" });
 
+// ===============================
+// GOOGLE OAUTH
+// ===============================
 const oauth2Client = new google.auth.OAuth2(
   process.env.YT_CLIENT_ID,
   process.env.YT_CLIENT_SECRET,
@@ -22,6 +33,9 @@ const oauth2Client = new google.auth.OAuth2(
 
 const SCOPES = ["https://www.googleapis.com/auth/youtube.upload"];
 
+// ===============================
+// AUTH ROUTE
+// ===============================
 app.get("/auth", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -30,46 +44,92 @@ app.get("/auth", (req, res) => {
   res.redirect(url);
 });
 
+// ===============================
+// OAUTH CALLBACK
+// ===============================
 app.get("/auth/callback", async (req, res) => {
-  const { tokens } = await oauth2Client.getToken(req.query.code);
-  fs.writeFileSync("token.json", JSON.stringify(tokens));
-  res.send("✅ Login success – app ready");
+  try {
+    const { tokens } = await oauth2Client.getToken(req.query.code);
+    fs.writeFileSync("token.json", JSON.stringify(tokens));
+    res.send("✅ Login success – app ready");
+  } catch (e) {
+    res.status(500).send("OAuth error");
+  }
 });
 
-async function gemini(topic) {
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `Generate YouTube SEO JSON for: ${topic}` }] }]
-    })
-  });
+// ===============================
+// GEMINI AI
+// ===============================
+async function generateMeta(topic) {
+  const r = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `Generate YouTube SEO JSON with title, description, tags, hashtags for: ${topic}`
+              }
+            ]
+          }
+        ]
+      })
+    }
+  );
+
   const j = await r.json();
   return JSON.parse(j.candidates[0].content.parts[0].text);
 }
 
+// ===============================
+// UPLOAD ROUTE
+// ===============================
 app.post("/upload", upload.single("video"), async (req, res) => {
-  const meta = await gemini(req.body.topic);
-  oauth2Client.setCredentials(JSON.parse(fs.readFileSync("token.json")));
+  try {
+    const meta = await generateMeta(req.body.topic);
 
-  const youtube = google.youtube({ version: "v3", auth: oauth2Client });
+    oauth2Client.setCredentials(
+      JSON.parse(fs.readFileSync("token.json"))
+    );
 
-  const r = await youtube.videos.insert({
-    part: "snippet,status",
-    requestBody: {
-      snippet: {
-        title: meta.title,
-        description: meta.description,
-        tags: meta.tags,
-        categoryId: "20"
+    const youtube = google.youtube({
+      version: "v3",
+      auth: oauth2Client
+    });
+
+    const response = await youtube.videos.insert({
+      part: "snippet,status",
+      requestBody: {
+        snippet: {
+          title: meta.title,
+          description: meta.description,
+          tags: meta.tags,
+          categoryId: "20"
+        },
+        status: {
+          privacyStatus: "public"
+        }
       },
-      status: { privacyStatus: "public" }
-    },
-    media: { body: fs.createReadStream(req.file.path) }
-  });
+      media: {
+        body: fs.createReadStream(req.file.path)
+      }
+    });
 
-  fs.unlinkSync(req.file.path);
-  res.json({ success: true, videoId: r.data.id });
+    fs.unlinkSync(req.file.path);
+
+    res.json({
+      success: true,
+      videoId: response.data.id
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Upload failed" });
+  }
 });
 
-app.listen(3000);
+// ===============================
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
