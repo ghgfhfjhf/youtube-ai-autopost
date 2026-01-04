@@ -1,9 +1,8 @@
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import fetch from "node-fetch";
 import fs from "fs";
-import path from "path";
+import fetch from "node-fetch";
 import { google } from "googleapis";
 import dotenv from "dotenv";
 
@@ -21,7 +20,7 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// ENSURE UPLOADS FOLDER EXISTS (RENDER FIX)
+// ENSURE UPLOADS FOLDER EXISTS
 // ===============================
 const uploadDir = "uploads";
 
@@ -30,12 +29,15 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // ===============================
-// MULTER CONFIG
+// MULTER CONFIG (100MB LIMIT)
 // ===============================
-const upload = multer({ dest: uploadDir });
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
+});
 
 // ===============================
-// GOOGLE OAUTH SETUP
+// GOOGLE OAUTH
 // ===============================
 const oauth2Client = new google.auth.OAuth2(
   process.env.YT_CLIENT_ID,
@@ -72,10 +74,10 @@ app.get("/auth/callback", async (req, res) => {
 });
 
 // ===============================
-// GEMINI AI METADATA
+// GEMINI AI META GENERATOR
 // ===============================
 async function generateMeta(topic) {
-  const r = await fetch(
+  const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
     {
       method: "POST",
@@ -85,7 +87,7 @@ async function generateMeta(topic) {
           {
             parts: [
               {
-                text: `Generate YouTube SEO JSON with title, description, tags, hashtags for: ${topic}`
+                text: `Generate ONLY JSON with keys: title, description, tags for YouTube video about: ${topic}`
               }
             ]
           }
@@ -94,8 +96,8 @@ async function generateMeta(topic) {
     }
   );
 
-  const j = await r.json();
-  return JSON.parse(j.candidates[0].content.parts[0].text);
+  const data = await response.json();
+  return JSON.parse(data.candidates[0].content.parts[0].text);
 }
 
 // ===============================
@@ -133,7 +135,8 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       },
       media: {
         body: fs.createReadStream(req.file.path)
-      }
+      },
+      timeout: 0 // IMPORTANT FOR RENDER
     });
 
     fs.unlinkSync(req.file.path);
@@ -142,6 +145,7 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       success: true,
       videoId: response.data.id
     });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Upload failed" });
@@ -149,6 +153,9 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 });
 
 // ===============================
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
+// PORT FIX FOR RENDER
+// ===============================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
 });
