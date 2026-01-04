@@ -3,6 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import fetch from "node-fetch";
 import fs from "fs";
+import path from "path";
 import { google } from "googleapis";
 import dotenv from "dotenv";
 
@@ -12,18 +13,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ HOME ROUTE (NOT FOUND FIX)
+// ===============================
+// HOME ROUTE
+// ===============================
 app.get("/", (req, res) => {
   res.send("🚀 AI YouTube Auto-Post Server is running!");
 });
 
 // ===============================
-// MULTER (VIDEO UPLOAD)
+// ENSURE UPLOADS FOLDER EXISTS (RENDER FIX)
 // ===============================
-const upload = multer({ dest: "uploads/" });
+const uploadDir = "uploads";
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
 
 // ===============================
-// GOOGLE OAUTH
+// MULTER CONFIG
+// ===============================
+const upload = multer({ dest: uploadDir });
+
+// ===============================
+// GOOGLE OAUTH SETUP
 // ===============================
 const oauth2Client = new google.auth.OAuth2(
   process.env.YT_CLIENT_ID,
@@ -34,31 +46,33 @@ const oauth2Client = new google.auth.OAuth2(
 const SCOPES = ["https://www.googleapis.com/auth/youtube.upload"];
 
 // ===============================
-// AUTH ROUTE
+// AUTH START
 // ===============================
 app.get("/auth", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
-    scope: SCOPES
+    scope: SCOPES,
+    prompt: "consent"
   });
   res.redirect(url);
 });
 
 // ===============================
-// OAUTH CALLBACK
+// AUTH CALLBACK
 // ===============================
 app.get("/auth/callback", async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(req.query.code);
     fs.writeFileSync("token.json", JSON.stringify(tokens));
     res.send("✅ Login success – app ready");
-  } catch (e) {
+  } catch (err) {
+    console.error(err);
     res.status(500).send("OAuth error");
   }
 });
 
 // ===============================
-// GEMINI AI
+// GEMINI AI METADATA
 // ===============================
 async function generateMeta(topic) {
   const r = await fetch(
@@ -85,10 +99,14 @@ async function generateMeta(topic) {
 }
 
 // ===============================
-// UPLOAD ROUTE
+// VIDEO UPLOAD ROUTE
 // ===============================
 app.post("/upload", upload.single("video"), async (req, res) => {
   try {
+    if (!fs.existsSync("token.json")) {
+      return res.status(401).json({ error: "Login required first" });
+    }
+
     const meta = await generateMeta(req.body.topic);
 
     oauth2Client.setCredentials(
@@ -125,6 +143,7 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       videoId: response.data.id
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Upload failed" });
   }
 });
